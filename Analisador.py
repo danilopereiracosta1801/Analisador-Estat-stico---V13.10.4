@@ -1,96 +1,53 @@
 import streamlit as st
 import requests
-import pandas as pd
 from datetime import datetime, timedelta
 import urllib3
 import time
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-st.set_page_config(page_title="V13 Pro v10.7 - Blindado", layout="wide")
+st.set_page_config(page_title="V13 Pro v10.8 - Direct Mode", layout="wide")
 
 class AnalisadorEngineV13:
     def __init__(self):
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
             "Referer": "https://www.sofascore.com/",
             "Origin": "https://www.sofascore.com"
-        }
-        # Dicionário para resolver siglas que a API bloqueia
-        self.tradutor = {
-            "PSG": "Paris Saint-Germain",
-            "CITY": "Manchester City",
-            "UNITED": "Manchester United",
-            "BAYERN": "Bayern München",
-            "REAL": "Real Madrid",
-            "BARCA": "Barcelona"
         }
 
     def consultar_api(self, endpoint):
         url = f"https://api.sofascore.com/api/v1/{endpoint}"
-        for _ in range(3):
-            try:
-                response = requests.get(url, headers=self.headers, timeout=20, verify=False)
-                if response.status_code == 200: return response.json()
-                time.sleep(1)
-            except: continue
-        return {}
+        try:
+            # Timeout curto para não travar a interface
+            response = requests.get(url, headers=self.headers, timeout=10, verify=False)
+            return response.json() if response.status_code == 200 else {}
+        except: return {}
 
-    def buscar_time_id(self, query):
-        q = query.strip().upper()
-        # Usa o tradutor se a sigla existir
-        busca = self.tradutor.get(q, query)
+    def obter_id(self, termo):
+        # Se o utilizador digitar um número direto, usa como ID
+        if termo.isdigit(): return int(termo), f"ID:{termo}"
         
-        dados = self.consultar_api(f"search/all?q={busca}")
-        
-        # Se não achar nada, tenta buscar apenas a primeira palavra
-        if not dados.get('results'):
-            primeira_palavra = busca.split()[0]
-            dados = self.consultar_api(f"search/all?q={primeira_palavra}")
-
+        # Tenta a busca por nome
+        dados = self.consultar_api(f"search/all?q={termo}")
         for item in dados.get('results', []):
             if item.get('type') == 'team':
                 ent = item['entity']
                 return ent['id'], ent.get('name', 'Time')
-        return None, query
+        return None, termo
 
-    def buscar_odd_evento(self, team_id, oponente_id):
-        proximos = self.consultar_api(f"team/{team_id}/events/next/0")
-        for ev in proximos.get('events', []):
-            h_id = ev.get('homeTeam', {}).get('id')
-            a_id = ev.get('awayTeam', {}).get('id')
-            if h_id == oponente_id or a_id == oponente_id:
-                try:
-                    odds = self.consultar_api(f"event/{ev['id']}/odds/1/all")
-                    for m in odds.get('markets', []):
-                        if m.get('marketName') == 'Full time':
-                            c = m.get('choices', [])
-                            return min(float(c[0]['value']), float(c[2]['value']))
-                except: pass
-        return 2.0
-
-    def deep_scan_v13(self, team_id, limite=5):
+    def deep_scan_v13(self, team_id):
         limite_60_dias = datetime.now() - timedelta(days=60)
-        eventos = []
-        for p in [0, 1]:
-            d = self.consultar_api(f"team/{team_id}/events/last/{p}")
-            eventos.extend(d.get('events', []))
-            
+        # Pega apenas a página 0 para máxima velocidade no Android
+        d = self.consultar_api(f"team/{team_id}/events/last/0")
         res = []
-        for ev in [e for e in eventos if e.get('status', {}).get('type') == 'finished']:
-            if len(res) >= limite: break
+        for ev in d.get('events', []):
+            if ev.get('status', {}).get('type') != 'finished': continue
             dt = datetime.fromtimestamp(ev['startTimestamp'])
             if dt < limite_60_dias: continue
             
-            # Correção definitiva para KeyError: 'shortName'
-            h_n = ev.get('homeTeam', {}).get('shortName', ev.get('homeTeam', {}).get('name', 'Casa'))
-            a_n = ev.get('awayTeam', {}).get('shortName', ev.get('awayTeam', {}).get('name', 'Fora'))
-            
-            res.append({
-                "data": dt.strftime('%d/%m'), 
-                "gols": ev.get('homeScore', {}).get('display', 0) + ev.get('awayScore', {}).get('display', 0), 
-                "confronto": f"{h_n} x {a_n}"
-            })
+            gols = ev.get('homeScore', {}).get('display', 0) + ev.get('awayScore', {}).get('display', 0)
+            res.append({"gols": gols})
         return res
 
 # --- INTERFACE STREAMLIT ---
