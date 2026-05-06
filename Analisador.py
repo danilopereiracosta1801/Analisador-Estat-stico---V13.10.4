@@ -7,7 +7,7 @@ import time
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-st.set_page_config(page_title="V13 Pro v10.6 - Final", layout="wide")
+st.set_page_config(page_title="V13 Pro v10.7 - Blindado", layout="wide")
 
 class AnalisadorEngineV13:
     def __init__(self):
@@ -16,6 +16,15 @@ class AnalisadorEngineV13:
             "Referer": "https://www.sofascore.com/",
             "Origin": "https://www.sofascore.com"
         }
+        # Dicionário para resolver siglas que a API bloqueia
+        self.tradutor = {
+            "PSG": "Paris Saint-Germain",
+            "CITY": "Manchester City",
+            "UNITED": "Manchester United",
+            "BAYERN": "Bayern München",
+            "REAL": "Real Madrid",
+            "BARCA": "Barcelona"
+        }
 
     def consultar_api(self, endpoint):
         url = f"https://api.sofascore.com/api/v1/{endpoint}"
@@ -23,18 +32,22 @@ class AnalisadorEngineV13:
             try:
                 response = requests.get(url, headers=self.headers, timeout=20, verify=False)
                 if response.status_code == 200: return response.json()
-                time.sleep(0.5)
+                time.sleep(1)
             except: continue
         return {}
 
     def buscar_time_id(self, query):
-        # Tenta a busca original
-        dados = self.consultar_api(f"search/all?q={query}")
+        q = query.strip().upper()
+        # Usa o tradutor se a sigla existir
+        busca = self.tradutor.get(q, query)
         
-        # Se falhar e for sigla, tenta expandir (ex: PSG -> Paris Saint-Germain)
-        if not dados.get('results') and query.upper() == "PSG":
-            dados = self.consultar_api("search/all?q=Paris%20Saint-Germain")
+        dados = self.consultar_api(f"search/all?q={busca}")
         
+        # Se não achar nada, tenta buscar apenas a primeira palavra
+        if not dados.get('results'):
+            primeira_palavra = busca.split()[0]
+            dados = self.consultar_api(f"search/all?q={primeira_palavra}")
+
         for item in dados.get('results', []):
             if item.get('type') == 'team':
                 ent = item['entity']
@@ -69,9 +82,15 @@ class AnalisadorEngineV13:
             dt = datetime.fromtimestamp(ev['startTimestamp'])
             if dt < limite_60_dias: continue
             
+            # Correção definitiva para KeyError: 'shortName'
             h_n = ev.get('homeTeam', {}).get('shortName', ev.get('homeTeam', {}).get('name', 'Casa'))
             a_n = ev.get('awayTeam', {}).get('shortName', ev.get('awayTeam', {}).get('name', 'Fora'))
-            res.append({"data": dt.strftime('%d/%m'), "gols": ev['homeScore']['display'] + ev['awayScore']['display'], "confronto": f"{h_n} x {a_n}"})
+            
+            res.append({
+                "data": dt.strftime('%d/%m'), 
+                "gols": ev.get('homeScore', {}).get('display', 0) + ev.get('awayScore', {}).get('display', 0), 
+                "confronto": f"{h_n} x {a_n}"
+            })
         return res
 
 # --- INTERFACE STREAMLIT ---
