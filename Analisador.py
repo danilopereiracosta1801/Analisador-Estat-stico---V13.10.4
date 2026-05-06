@@ -116,47 +116,41 @@ st.title("🛡️ Analisador Estatístico - SofaScore Pro v13.10.4")
 entrada = st.text_area("Insira os jogos:", "Al-Khaleej x Al-Hilal")
 
 if st.button("🚀 INICIAR ANÁLISE"):
-    engine = AnalisadorEngineV13()
-    jogos = [l for l in entrada.split('\n') if 'x' in l.lower()]
-    
-    for linha in jogos:
-        partes = linha.lower().split('x')
-        id1, n1 = engine.buscar_time_id(partes[0].strip())
-        id2, n2 = engine.buscar_time_id(partes[1].strip())
+    try:
+        engine = AnalisadorEngineV13()
+        jogos = [l for l in entrada.split('\n') if 'x' in l.lower()]
+        
+        if not jogos:
+            st.warning("⚠️ Formato inválido. Use: Time A x Time B")
+        
+        for linha in jogos:
+            # Garante que o loop não pare se um jogo falhar
+            try:
+                partes = linha.lower().split('x')
+                id1, n1 = engine.buscar_time_id(partes[0].strip())
+                id2, n2 = engine.buscar_time_id(partes[1].strip())
 
-        if id1 and id2:
-            with st.status(f"Analisando {n1} vs {n2}...", expanded=False):
-                odd_fav = engine.buscar_odd_evento(id1, id2)
-                f1 = engine.deep_scan_v13(id1)
-                f2 = engine.deep_scan_v13(id2)
-            
-            # Lógica de Travas V13
-            if odd_fav < 1.25:
-                trava_ft, t_val, trava_ht, cor = "UNDER 6.5 FT", 6.5, "UNDER 2.5 HT", "#C0392B"
-            elif odd_fav < 1.45:
-                trava_ft, t_val, trava_ht, cor = "UNDER 5.5 FT", 5.5, "UNDER 2.5 HT", "#D35400"
-            else:
-                trava_ft, t_val, trava_ht, cor = "UNDER 4.5 FT", 4.5, "UNDER 1.5 HT", "#27AE60"
+                if id1 and id2:
+                    with st.status(f"Analisando {n1} vs {n2}...", expanded=False):
+                        odd_fav = engine.buscar_odd_evento(id1, id2)
+                        f1 = engine.deep_scan_v13(id1)
+                        f2 = engine.deep_scan_v13(id2)
+                    
+                    # Se não houver jogos nos últimos 60 dias, avisa
+                    if not f1 and not f2:
+                        st.error(f"❌ Sem jogos recentes (60 dias) para {n1} ou {n2}")
+                        continue
+                    
+                    # (Aqui continua o resto da lógica de exibição das boxes...)
+                    # ... [Cole o restante do código das boxes aqui] ...
 
-            with st.container(border=True):
-                st.subheader(f"🏟️ {n1} vs {n2}")
-                c1, c2, c3, c4 = st.columns(4)
+                else:
+                    st.error(f"🔍 Não achei um dos times: {linha}")
+            except Exception as e:
+                st.error(f"💥 Erro ao processar este jogo: {str(e)}")
                 
-                def render_box(col, label, valor, prob, cor_box):
-                    col.markdown(f"<div style='background-color:{cor_box};padding:10px;border-radius:10px;text-align:center;color:white;'><b>{label}</b><br><span style='font-size:20px;'>{valor}</span><br>{prob}% Confiança</div>", unsafe_allow_html=True)
-
-                render_box(c1, "GOLS FT", trava_ft, calcular_prob_v13(f1, f2, "gols", t_val, "under"), cor)
-                render_box(c2, "GOLS HT", trava_ht, 92, "#2E86C1")
-                render_box(c3, "CANTOS", "OVER 8.5", calcular_prob_v13(f1, f2, "cantos", 8.5), "#D4AC0D")
-                render_box(c4, "CARDS", "OVER 3.5", calcular_prob_v13(f1, f2, "cards", 3.5), "#A04000")
-
-                with st.expander("🔍 Histórico (Últimos 60 dias)"):
-                    st.write(f"**{n1}**")
-                    st.table(pd.DataFrame(f1)[['data', 'confronto', 'cantos', 'cards']])
-                    st.write(f"**{n2}**")
-                    st.table(pd.DataFrame(f2)[['data', 'confronto', 'cantos', 'cards']])
-
-
+    except Exception as e:
+        st.error(f"🚨 Erro Geral: {str(e)}")
 st.text("Métricas de Travas Ativas:")
 st.text("## Full Time 4.5 / 5.5 / 6.5")
 st.text("## Half Time 0.5 / 1.5 / 2.5")
