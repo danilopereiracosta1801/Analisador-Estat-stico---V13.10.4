@@ -3,112 +3,76 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 import urllib3
+import time
 
-# Desabilita avisos de certificados para redes corporativas
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-st.set_page_config(page_title="Analisador Estatístico- SofaScore v13.10.4", layout="wide")
+st.set_page_config(page_title="V13 Pro v10.6 - Final", layout="wide")
 
 class AnalisadorEngineV13:
     def __init__(self):
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Origin": "https://www.sofascore.com",
-            "Referer": "https://www.sofascore.com/"
+            "Referer": "https://www.sofascore.com/",
+            "Origin": "https://www.sofascore.com"
         }
 
     def consultar_api(self, endpoint):
-        try:
-            url = f"https://api.sofascore.com/api/v1/{endpoint}"
-            # verify=False resolve o erro SSLCertVerificationError
-            response = requests.get(url, headers=self.headers, timeout=15, verify=False)
-            return response.json() if response.status_code == 200 else {}
-        except Exception:
-            return {}
+        url = f"https://api.sofascore.com/api/v1/{endpoint}"
+        for _ in range(3):
+            try:
+                response = requests.get(url, headers=self.headers, timeout=20, verify=False)
+                if response.status_code == 200: return response.json()
+                time.sleep(0.5)
+            except: continue
+        return {}
 
     def buscar_time_id(self, query):
+        # Tenta a busca original
         dados = self.consultar_api(f"search/all?q={query}")
-        if not dados: return None, query
+        
+        # Se falhar e for sigla, tenta expandir (ex: PSG -> Paris Saint-Germain)
+        if not dados.get('results') and query.upper() == "PSG":
+            dados = self.consultar_api("search/all?q=Paris%20Saint-Germain")
+        
         for item in dados.get('results', []):
             if item.get('type') == 'team':
                 ent = item['entity']
-                return ent['id'], ent.get('name', 'Time Desconhecido')
+                return ent['id'], ent.get('name', 'Time')
         return None, query
 
-    # --- CORREÇÃO: ADICIONADO ATRIBUTO FALTANTE ---
     def buscar_odd_evento(self, team_id, oponente_id):
         proximos = self.consultar_api(f"team/{team_id}/events/next/0")
         for ev in proximos.get('events', []):
             h_id = ev.get('homeTeam', {}).get('id')
             a_id = ev.get('awayTeam', {}).get('id')
             if h_id == oponente_id or a_id == oponente_id:
-                event_id = ev.get('id')
-                odds_data = self.consultar_api(f"event/{event_id}/odds/1/all")
                 try:
-                    for market in odds_data.get('markets', []):
-                        if market.get('marketName') == 'Full time':
-                            choices = market.get('choices', [])
-                            return min(float(choices[0].get('value', 2.0)), float(choices[2].get('value', 2.0)))
+                    odds = self.consultar_api(f"event/{ev['id']}/odds/1/all")
+                    for m in odds.get('markets', []):
+                        if m.get('marketName') == 'Full time':
+                            c = m.get('choices', [])
+                            return min(float(c[0]['value']), float(c[2]['value']))
                 except: pass
         return 2.0
 
-    def extrair_estatisticas(self, event_id):
-        dados = self.consultar_api(f"event/{event_id}/statistics")
-        esc, car = 0, 0
-        try:
-            for period in dados.get('statistics', []):
-                if period.get('period') == 'ALL':
-                    for group in period.get('groups', []):
-                        for item in group.get('statisticsItems', []):
-                            if item.get('name') == 'Corner kicks':
-                                esc = int(item.get('homeValue', 0)) + int(item.get('awayValue', 0))
-                            if item.get('name') == 'Yellow cards':
-                                car = int(item.get('homeValue', 0)) + int(item.get('awayValue', 0))
-        except: pass
-        return esc, car
-
     def deep_scan_v13(self, team_id, limite=5):
-        # TRAVA DE 60 DIAS
         limite_60_dias = datetime.now() - timedelta(days=60)
-        
-        eventos_completos = []
+        eventos = []
         for p in [0, 1]:
-            dados = self.consultar_api(f"team/{team_id}/events/last/{p}")
-            eventos_completos.extend(dados.get('events', []))
+            d = self.consultar_api(f"team/{team_id}/events/last/{p}")
+            eventos.extend(d.get('events', []))
             
-        finalizados = [ev for ev in eventos_completos if ev.get('status', {}).get('type') == 'finished']
-        
-        resultados = []
-        for ev in finalizados:
-            if len(resultados) >= limite: break
+        res = []
+        for ev in [e for e in eventos if e.get('status', {}).get('type') == 'finished']:
+            if len(res) >= limite: break
+            dt = datetime.fromtimestamp(ev['startTimestamp'])
+            if dt < limite_60_dias: continue
             
-            data_jogo = datetime.fromtimestamp(ev['startTimestamp'])
-            if data_jogo < limite_60_dias: continue
-
-            h_score = ev.get('homeScore', {}).get('display', 0)
-            a_score = ev.get('awayScore', {}).get('display', 0)
-            
-            # --- CORREÇÃO: EVITA KeyError 'shortName' ---
-            home_n = ev.get('homeTeam', {}).get('shortName', ev.get('homeTeam', {}).get('name', 'Time A'))
-            away_n = ev.get('awayTeam', {}).get('shortName', ev.get('awayTeam', {}).get('name', 'Time B'))
-            
-            cantos, cards = self.extrair_estatisticas(ev['id'])
-            resultados.append({
-                "data": data_jogo.strftime('%d/%m'),
-                "gols": h_score + a_score,
-                "cantos": cantos,
-                "cards": cards,
-                "confronto": f"{home_n} {h_score}x{a_score} {away_n}"
-            })
-        return resultados
-
-def calcular_prob_v13(f1, f2, campo, threshold, tipo="over"):
-    def testar(j):
-        val = j.get(campo, 0)
-        return val > threshold if tipo == "over" else val < threshold
-    p1 = sum(1 for j in f1 if testar(j)) / len(f1) if f1 else 0.5
-    p2 = sum(1 for j in f2 if testar(j)) / len(f2) if f2 else 0.5
-    return int(((p1 + p2) / 2) * 100)
+            h_n = ev.get('homeTeam', {}).get('shortName', ev.get('homeTeam', {}).get('name', 'Casa'))
+            a_n = ev.get('awayTeam', {}).get('shortName', ev.get('awayTeam', {}).get('name', 'Fora'))
+            res.append({"data": dt.strftime('%d/%m'), "gols": ev['homeScore']['display'] + ev['awayScore']['display'], "confronto": f"{h_n} x {a_n}"})
+        return res
 
 # --- INTERFACE STREAMLIT ---
 st.title("🛡️ Analisador Estatístico - SofaScore Pro v13.10.4")
